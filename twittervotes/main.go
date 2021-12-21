@@ -6,6 +6,10 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
+
+	"github.com/bitly/go-nsq"
+	"gopkg.in/mgo.v2"
 )
 
 var db *mgo.Session
@@ -67,4 +71,27 @@ func main() {
 		closeConn()
 	}()
 	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
+	if err := dialdb(); err != nil {
+		log.Fatalln("MongoDBへのダイヤルに失敗しました:", err)
+	}
+	defer closedb()
+	// 処理を開始します
+	votes := make(chan string) // 投票結果のためのチャネル
+	publisherStoppedChan := publishVotes(votes)
+	twitterStoppedChan := startTwitterStream(stopChan, votes)
+	go func() {
+		for {
+			time.Sleep(1 * time.Minute)
+			closeConn()
+			stoplock.Lock()
+			if stop {
+				stoplock.Unlock()
+				break
+			}
+			stoplock.Unlock()
+		}
+	}()
+	<-twitterStoppedChan
+	close(votes)
+	<-publisherStoppedChan
 }
